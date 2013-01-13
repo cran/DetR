@@ -1,0 +1,5 @@
+useDynLib("DetR")
+import("matrixStats")
+import("robustbase")
+export(DetLTS)
+export(DetMM)
