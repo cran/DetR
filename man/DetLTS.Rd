@@ -66,6 +66,10 @@ containing  the following components:
 
 }
 \references{
+
+    Vakili K. (2016). A study and implementation of robust estimators for 
+    multivariate and functional data (Doctoral dissertation). 	
+
     Maronna, R.A. and Zamar, R.H. (2002) Robust estimates of location
      and dispersion of high-dimensional datasets; \emph{Technometrics}
      \bold{44}(4), 307--317.
@@ -96,7 +100,11 @@ y0<-rnorm(n)
 out1<-DetLTS(x0,y0,h=h)
 }
 \author{
-  Vakili Kaveh with C code from M. Maechler (Qn) and R code from function ltsReg in package robustbase.
+ Vakili Kaveh using translation of the C code from pcaPP (by Peter Filzmoser, Heinrich Fritz, Klaudius Kalcher, see citation("pcaPP")) for 
+ the Qn and scaleTau2 (Original by Kjell Konis with substantial modifications by Martin Maechler)  from robustbase
+ (see citation("scaleTau2"))
+ as well as R code from function ltsReg in package robustbase (originally written by Valentin Todorov valentin.todorov@chello.at, based on work written for S-plus by Peter Rousseeuw and Katrien van Driessen from
+  University of Antwerp, see citation("ltsReg")).
 }
 \keyword{multivariate}
 \keyword{robust}

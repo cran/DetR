@@ -15,10 +15,25 @@
 using namespace Eigen;
 using Eigen::VectorXd;
 
-extern int unimcd(VectorXd& y,const int n,const int h,const int len,double initmean,double initcov);
+extern int unimcd(
+			VectorXd& y,
+			const int& n,
+			const int& h,
+			const int& len,
+			double& initmean,
+			double& initcov
+		);
 
 extern "C"{
-	void R_unimcd(double* yin,int* h,int* len,int* n,double* inmean,double* incov,int* inloc){
+	void R_unimcd(
+			double* yin,
+			int* h,
+			int* len,
+			int* n,
+			double* inmean,
+			double* incov,
+			int* inloc
+		){
 		VectorXd y=Map<VectorXd>(yin,*n);
 		int iloc;
 		const int In=*n,Ih=*h,Ilen=*len;
@@ -46,7 +61,7 @@ dyn.load("unimcd.so");
 unimcd<-function(y,h,len){
 #This code calls the UNIMCD.C routine (it's a C translation of the one found in robustbase). 
 	inloc<-inmean<-incov<-0.0;
-	out<-.C("R_unimcd",as.single(y),as.integer(h),as.integer(len),as.integer(length(y)),as.single(inmean),as.single(incov),as.integer(inloc))
+	out<-.C("R_unimcd",as.double(y),as.integer(h),as.integer(len),as.integer(length(y)),as.double(inmean),as.double(incov),as.integer(inloc))
 	list(initmean=as.numeric(out[[5]]),initcov=as.numeric(out[[6]]),iloc=as.numeric(out[[7]]))
 }
 n<-100

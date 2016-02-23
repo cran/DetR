@@ -31,10 +31,17 @@ struct IdLess {					//internal function.
     }
     double const* values;
 };
-double whimed_i(VectorXd& a,VectorXi& w,int n,VectorXd& a_cand,VectorXd& a_psrt,VectorXi& w_cand){
+double whimed_i(
+			VectorXd& a,
+			VectorXi& w,
+			int n,
+			VectorXd& a_cand,
+			VectorXd& a_psrt,
+			VectorXi& w_cand
+		){
 //Eigen-ized version of whimed_i. See citation("pcaPP")
 	int n2,i,k_cand,nn=n;/* sum of weights: `int' do overflow when  n ~>= 1e5 */
-	int wleft,wmid,wright,w_tot,wrest=0;
+	int64_t wleft,wmid,wright,w_tot,wrest=0;
 	double trial;
 	w_tot=w.head(n).sum();
 	do{
@@ -75,8 +82,12 @@ double whimed_i(VectorXd& a,VectorXi& w,int n,VectorXd& a_cand,VectorXd& a_psrt,
 		w.head(nn)=w_cand.head(nn);
 	} while(1); 
 }
-double qn(Ref<VectorXd> y,int retMed){//Eigen-ized version of qn. See citation("pcaPP")
-		int n=y.rows();
+double qn(
+		Ref<VectorXd> x,
+		int retMed
+	){//Eigen-ized version of qn. See citation("pcaPP")
+		const int n=x.rows();
+		VectorXd y=x;
 		VectorXd work=VectorXd::Zero(n);
     		VectorXi p=VectorXi::Zero(n);
     		VectorXi q=VectorXi::Zero(n);
@@ -165,7 +176,71 @@ double qn(Ref<VectorXd> y,int retMed){//Eigen-ized version of qn. See citation("
 		ri*=dn;
 		return(ri);
 }
-int unimcd(VectorXd& y,const int n,const int h,const int len,double initmean,double initcov){
+void cov_CStep(
+		VectorXi& dIn,
+		MatrixXd& x,
+		const int h,
+		const int h0,
+		int w3
+	){
+	const int n=x.rows(),p=x.cols();
+	double w1,w0;
+	int w2=1,i;
+	MatrixXd xSub(h,p);
+	for(i=0;i<h0;i++) 	xSub.row(i)=x.row(dIn(i));
+	RowVectorXd xSub_mean(p);
+	xSub_mean=xSub.topRows(h0).colwise().mean();	
+	xSub.topRows(h0).rowwise()-=xSub_mean;
+	x.rowwise()-=xSub_mean;
+	MatrixXd Sig(p,p);
+	//Sig=xSub.topRows(h0).adjoint()*xSub.topRows(h0);
+	Sig.setZero().selfadjointView<Lower>().rankUpdate(xSub.topRows(h0).transpose());
+	Sig.array()/=(double)(h0-1);
+	LDLT<MatrixXd> chol=Sig.ldlt();
+	MatrixXd b=MatrixXd::Identity(p,p);
+	chol.solveInPlace(b);
+	w1=chol.vectorD().array().minCoeff();
+	VectorXd dP(n);	
+	if(w1>1e-6){
+		w1=std::numeric_limits<double>::max();
+		dP=((x*b).cwiseProduct(x)).rowwise().sum();
+	} else {
+		w2=0;
+		w3=0;
+		w1=chol.vectorD().array().log().sum()*2.00;
+	}
+	while(w2){	
+		dIn.setLinSpaced(n,0,n-1);
+		std::nth_element(dIn.data(),dIn.data()+h,dIn.data()+dIn.size(),IdLess(dP.data()));
+		for(i=0;i<h;i++) 	xSub.row(i)=x.row(dIn(i));
+		xSub_mean=xSub.colwise().mean();	
+		xSub.rowwise()-=xSub_mean;
+		x.rowwise()-=xSub_mean;
+		//Sig=xSub.adjoint()*xSub;
+		Sig.setZero().selfadjointView<Lower>().rankUpdate(xSub.transpose());
+		Sig.array()/=(double)(h-1);
+		chol=Sig.ldlt();
+		b=MatrixXd::Identity(p,p);
+		chol.solveInPlace(b);
+		if(chol.vectorD().array().minCoeff()>1e-6){
+			w0=w1;
+			w1=chol.vectorD().array().log().sum()*2.00;
+			dP=((x*b).cwiseProduct(x)).rowwise().sum();
+			(w0-w1<1e-3)?(w2=0):(w2=1);
+		} else {
+			w2=0;
+			w3=0;
+		}
+	}
+} 
+int unimcd(
+		VectorXd& y,
+		const int& n,
+		const int& h,
+		const int& len,
+		double& initmean,
+		double& initcov
+	){
 	//does NOT accept ties in the y's!
 	std::sort(y.data(),y.data()+y.size());
 	VectorXd ay(len);
@@ -184,7 +259,10 @@ int unimcd(VectorXd& y,const int n,const int h,const int len,double initmean,dou
 	initmean=ay(minone)/(double)h;
 	return(minone);
 }
-double Fmedian(Ref<VectorXd> x,int retMed){
+double Fmedian(
+		Ref<VectorXd> x,
+		int retMed
+	){
 	int n=x.rows();
 	int half=(n+1)/2-1;				
 	double med;
@@ -198,9 +276,24 @@ double Fmedian(Ref<VectorXd> x,int retMed){
 	}
 	return med;
 }
-double pCalc(Ref<VectorXd> x,int retMed,double (*pCalcMethod)(Ref<VectorXd>,int)){return(pCalcMethod(x,retMed));}
-double qCalc(Ref<VectorXd> x,int retMed,double (*qCalcMethod)(Ref<VectorXd>,int)){return(qCalcMethod(x,retMed));}
-double scaleTau2(Ref<VectorXd> x,int retMed){
+double pCalc(
+		Ref<VectorXd> x,
+		int retMed,
+		double (*pCalcMethod)(Ref<VectorXd>,int)
+	){
+		return(pCalcMethod(x,retMed));
+}
+double qCalc(
+		Ref<VectorXd> x,
+		int retMed,
+		double (*qCalcMethod)(Ref<VectorXd>,int)
+	){
+		return(qCalcMethod(x,retMed));
+}
+double scaleTau2(
+		Ref<VectorXd> x,
+		int retMed
+	){
 	int n=x.rows();
 	const double C1=4.5,tol=1e-8;
   	const double Es2c=0.9247153921761315;
@@ -228,13 +321,22 @@ double scaleTau2(Ref<VectorXd> x,int retMed){
 	sigma0*=sqrt(sigma1/(n*Es2c));
 	return(sigma0);
 }
-void FFOgkBasis(MatrixXd& x,const int& calcM,const int& intercept,VectorXd& dY,VectorXi& warn){
+void FFOgkBasis(
+		const MatrixXd& xi,
+		const int& calcM,
+		const int& intercept,
+		VectorXi& warn,
+		const int& h,
+		VectorXi& dIn,
+		int w3
+	){
 	double (*pFo[])(Ref<VectorXd>,int)={&qn,&scaleTau2}; 
 	double (*qFo[])(Ref<VectorXd>,int)={&Fmedian,&scaleTau2}; 
-	const int p=x.cols(),n=x.rows();	
+	const int p=xi.cols(),n=xi.rows(),h0=(n+1)/2;	
 	double b1=0.0,b2=0.0;
 	const double tol=1e-8;
 	int i,j;
+	MatrixXd x=xi;
 	RowVectorXd lamba(p);
 	MatrixXd x2=x;
 	if(intercept){
@@ -250,6 +352,7 @@ void FFOgkBasis(MatrixXd& x,const int& calcM,const int& intercept,VectorXd& dY,V
 	MatrixXd U=dvec1.asDiagonal();
 	VectorXd sYi(n);
 	VectorXd sYj(n);
+	VectorXd dY(n);
 	for(i=0;i<p;++i){
 		sYi=x.col(i);
 		for(j=0;j<i;++j){
@@ -264,27 +367,32 @@ void FFOgkBasis(MatrixXd& x,const int& calcM,const int& intercept,VectorXd& dY,V
 			U(j,i)=U(i,j);	
 		}		
 	}
-	JacobiSVD<MatrixXd> svd(U.topLeftCorner(p-1,p-1),ComputeThinV);
-	x2.leftCols(p-1)=x.leftCols(p-1)*svd.matrixV();
-	for(i=0;i<(p-1);i++)		lamba(i)=pCalc(x2.col(i),0,pFo[calcM]);
-	for(i=0;i<(p-1);i++)		warn(i)=(lamba(i)<tol)?1:0;
+	JacobiSVD<MatrixXd> svd(U,ComputeThinV);
+	x2=x*svd.matrixV();
+	for(i=0;i<p;i++)		lamba(i)=pCalc(x2.col(i),0,pFo[calcM]);
+	for(i=0;i<p;i++)		warn(i)=(lamba(i)<tol)?1:0;
 	i=warn.sum();
 	if(i>0)				return;
-	lamba.head(p-1)=lamba.head(p-1).array().abs2().inverse();
-	lamba.head(p-1)=(svd.matrixV()*lamba.head(p-1).asDiagonal()*svd.matrixV().transpose())*U.col(p-1).head(p-1);
-	dY=(x.leftCols(p-1)*lamba.head(p-1).transpose()-x.col(p-1)).array().abs();
+	for(i=0;i<p;i++)		x2.col(i).array()/=lamba(i);
+	dY=x2.array().abs2().rowwise().sum();
+	dIn.setLinSpaced(n,0,n-1);
+	std::nth_element(dIn.data(),dIn.data()+h,dIn.data()+dIn.size(),IdLess(dY.data()));
+	cov_CStep(dIn,x,h,h,w3);
 	return;
 }
-double unimcd_in(VectorXd& m_resd,const int& n1,const int& h){
-	const int len=n1-h+1;
-	double initmean=0.0,initcov=0.0;
+double unimcd_in(
+		const VectorXd& m_resd,
+		const int& h
+	){
+	const int n1=m_resd.size(),len=n1-h+1;
+	double initmean=0.0,initcov=0.0,sumw=0.0;
 	int minone;
 	if(h==n1){
-		initmean=m_resd.head(n1).sum()/(double)h;
-		initcov=(m_resd.head(n1).array()-initmean).abs2().sum()/(double)(h-1);
+		initmean=m_resd.sum()/(double)h;
+		initcov=(m_resd.array()-initmean).abs2().sum()/(double)(h-1);
 		return(sqrt(initcov));
 	}
-	VectorXd y=m_resd.head(n1);
+	VectorXd y=m_resd;
 	VectorXd ay(len);
 	VectorXd ay2(len);
 	VectorXd sq(len);
@@ -302,38 +410,65 @@ double unimcd_in(VectorXd& m_resd,const int& n1,const int& h){
 	initmean=ay(minone)/(double)h;
 	return(initmean);
 }
-VectorXi CStep(VectorXd& dP,const MatrixXd& x,const VectorXd& y,const VectorXi& h,VectorXd& objfun,const int& I,const int& h0,VectorXi& citer){
+void CstepPrep(
+		const MatrixXd& x,
+		const VectorXd& y,
+		const VectorXi& dIn,
+		VectorXd& dP,
+		const int& h0
+	){
 	const int n=x.rows(),p=x.cols();
 	double w1,w0;
 	int w2=1,i,j=0;
-	VectorXi dIn(n);
-	dIn.setLinSpaced(n,0,n-1);
-	std::nth_element(dIn.data(),dIn.data()+h0,dIn.data()+n,IdLess(dP.data()));
-	MatrixXd xSub(h(I),p);
-	VectorXd ySub(h(I));
+	MatrixXd xSub(h0,p);
+	VectorXd ySub(h0);
 	for(i=0;i<h0;i++) 	xSub.row(i)=x.row(dIn(i));
 	for(i=0;i<h0;i++) 	ySub(i)=y(dIn(i));
 	MatrixXd Sig(p,p);
-	Sig=xSub.topRows(h0).adjoint()*xSub.topRows(h0);
-	LDLT<MatrixXd> chol=Sig.ldlt();
+	//Sig=xSub.adjoint()*xSub;
+	//LDLT<MatrixXd> chol=Sig.ldlt();
+	Sig.setZero().selfadjointView<Lower>().rankUpdate(xSub.transpose());
+	LLT<MatrixXd> chol=Sig.llt();
 	VectorXd m_cf(p);
-	m_cf=chol.solve(xSub.topRows(h0).adjoint()*ySub.head(h0));
-	dP=((x*m_cf).array()-y.array()).abs2();
+	m_cf=chol.solve(xSub.adjoint()*ySub);
+	dP=((x*m_cf).array()-y.array()).abs();
+}
+VectorXi CStep(
+		const VectorXd& dPin,
+		const MatrixXd& x,
+		const VectorXd& y,
+		const VectorXi& h,
+		VectorXd& objfun,
+		const int& I,
+		VectorXi& citer
+	){
+	const int n=x.rows(),p=x.cols();
+	double w1,w0;
+	int w2=1,i,j=0;
+	MatrixXd xSub(h(I),p);
+	VectorXd ySub(h(I));
+	VectorXd m_cf(p);
+	MatrixXd Sig(p,p);
+	VectorXd dP(n);
+	VectorXi dIn(n);
+	dP=dPin;
 	w1=std::numeric_limits<double>::max();
 	while(w2){	
 		dIn.setLinSpaced(n,0,n-1);
 		std::nth_element(dIn.data(),dIn.data()+h(I),dIn.data()+n,IdLess(dP.data()));
 		for(i=0;i<h(I);i++) 	xSub.row(i)=x.row(dIn(i));
 		for(i=0;i<h(I);i++) 	ySub(i)=y(dIn(i));
-		Sig=xSub.adjoint()*xSub;
-		LDLT<MatrixXd> chol=Sig.ldlt();
+		//Sig=xSub.adjoint()*xSub;
+		//LDLT<MatrixXd> chol=Sig.ldlt();
+		Sig.setZero().selfadjointView<Lower>().rankUpdate(xSub.transpose());
+		LLT<MatrixXd> chol=Sig.llt();
 		m_cf=chol.solve(xSub.adjoint()*ySub);
-		dP=(x.leftCols(p-1)*m_cf.head(p-1)).array()-y.array();
-		m_cf(p-1)=unimcd_in(dP,n,h(I));
-		dP=((x*m_cf).array()-y.array()).abs2();
+		dP=y.array()-(x.leftCols(p-1)*m_cf.head(p-1)).array();
+		m_cf(p-1)=unimcd_in(dP,h(I));
+		dP=((x*m_cf).array()-y.array()).abs();
 		w0=w1;
 		j++;
-		w1=log(((xSub*m_cf).array()-ySub.array()).abs2().sum());
+		w1=log(((xSub*m_cf).array()-ySub.array()).abs().mean());
 		(w0-w1<1e-3)?(w2=0):(w2=1);
 	}
 	objfun(I)=w1;
@@ -341,28 +476,44 @@ VectorXi CStep(VectorXd& dP,const MatrixXd& x,const VectorXd& y,const VectorXi& 
 	return(dIn.head(h(I)).array());
 } 
 extern "C"{
-	void R_FastOGK(int* rn,int* rp,double* X,int* P,int* cMet,int* rint,int* rwarn,int* h,int* lh,int* rraw,int* rh0,double* Ofuns,int* doCstep,int* Citer){
-		const int CalcMet=*cMet,intercept=*rint,n=*rn,p=*rp,lhi=*lh,h0=*rh0,DoCsteps=*doCstep;
+	void R_FastOGK(
+			int* rn,	//01
+			int* rp,	//02
+			double* X,	//03
+			int* P,		//04
+			int* cMet,	//05
+			int* rint,	//06
+			int* rwarn,	//07
+			int* h,		//08
+			int* lh,	//09
+			int* rraw,	//10
+			double* Ofuns,	//11
+			int* doCstep,	//12
+			int* Citer,	//13
+			int* wout3	//14
+		){
+		const int CalcMet=*cMet,intercept=*rint,n=*rn,p=*rp,lhi=*lh,DoCsteps=*doCstep;
+		int w3=1;
 		MatrixXd xi=Map<MatrixXd>(X,n,p);
 		VectorXi hi=Map<VectorXi>(h,lhi);
 		VectorXd of(lhi);
 		VectorXi ct(lhi);
 		VectorXi warn(p);
-		VectorXd dY(n);	
-		VectorXi dI(n);
+		VectorXi dIn(n);
 		MatrixXi hsub(n,lhi);
 		warn.setZero();
-
-		FFOgkBasis(xi,CalcMet,intercept,dY,warn);
+		
+		FFOgkBasis(xi,CalcMet,intercept,warn,hi(0),dIn,w3);
+		Map<VectorXi>(rraw,hi(0))=dIn.head(hi(0)).array()+1;
 		Map<VectorXi>(rwarn,p)=warn.array();
-		dI.setLinSpaced(n,0,n-1);
-		std::nth_element(dI.data(),dI.data()+h0,dI.data()+n,IdLess(dY.data()));
-		Map<VectorXi>(rraw,h0)=dI.head(h0).array()+1;
 		int ws=warn.sum();
-		if(ws==0 && DoCsteps==1){
+		*wout3=w3;
+		if(ws==0 && DoCsteps==1 && w3==1){
+			VectorXd dP(n);
 			VectorXd yi=xi.col(p-1);
 			xi.col(p-1).setOnes();
-			for(int i=0;i<lhi;i++)	hsub.col(i).head(hi(i))=CStep(dY,xi,yi,hi,of,i,h0,ct);
+			CstepPrep(xi,yi,dIn,dP,hi(0));
+			for(int i=0;i<lhi;i++)	hsub.col(i).head(hi(i))=CStep(dP,xi,yi,hi,of,i,ct);
 			Map<MatrixXi>(P,n,lhi)=hsub.array()+1;
 			Map<VectorXd>(Ofuns,lhi)=of.array().exp();
 			Map<VectorXi>(Citer,lhi)=ct;

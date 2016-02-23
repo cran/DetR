@@ -1,26 +1,179 @@
-unimcd<-function(y,h,len){
-#This code calls the UNIMCD.C routine (it's a C translation of the one found in robustbase). 
+inUMCD<-function(x){
 	inloc<-inmean<-incov<-0.0;
-	out<-.C("R_unimcd",as.double(y),as.integer(h),as.integer(len),as.integer(length(y)),as.double(inmean),as.double(incov),as.integer(inloc),PACKAGE="DetR")
+	h<-ceiling((length(x)+1+1)/2)
+	len<-length(x)-h+1
+	out<-.C("R_unimcd",as.double(x),as.integer(h),as.integer(len),as.integer(length(x)),as.double(inmean),as.double(incov),as.integer(inloc))
 	list(initmean=as.numeric(out[[5]]),initcov=as.numeric(out[[6]]),iloc=as.numeric(out[[7]]))
 }
-fxOGK<-function (Data, scale_est = "Qn", intercept=1,h,doCsteps=1) {
-    p <- ncol(Data)
-    n <- nrow(Data)
-	h0<-ceiling(n/2)
-	H0<-rep(0,h0)
-    lh <- length(h)
-    Q <- matrix(0,n,lh)
+inFM<-function(x){
+	fit2<-.C("R_inFM",
+			as.integer(length(x)),
+			as.double(x),
+			as.double(0.0),
+		DUP=TRUE,PACKAGE="DetR")
+	fit2[[3]]
+}
+inQn<-function(x){
+	fit2<-.C("R_inQn",
+			as.integer(length(x)),
+			as.double(x),
+			as.double(0.0),
+		DUP=TRUE,PACKAGE="DetR")
+	fit2[[3]]
+}
+DetLTS_raw_dmcd<-function(
+				x,
+				y,
+				intercept=1,
+				alpha=0.75,
+				h=NULL,
+				scale_est="scaleTau2",
+				doCsteps=1
+			){
+	y<-as.matrix(y)
+	x<-as.matrix(x)
+	x<-data.matrix(x)
+	n<-nrow(x)
+	p<-ncol(x)
+	q<-ncol(y)
+	if(is.numeric(intercept)==0)	stop("intercept should be set to either 1 or 0.")
+	if(sum(intercept==c(0,1))==0) 	stop("intercept should be set to either 1 or 0.")
+	if(q>1)				stop("y is not one-dimensional.")
+	na.x<-complete.cases(x)
+	na.y<-complete.cases(y)
+	if(min(c(sum(na.y),sum(na.x)))<n)	stop("x or y contain missing data. Remove the rows with missing data.")
+	Mtype<-match(scale_est,c("qn","scaleTau2"))[1]
+	if(is.na(Mtype))		stop("scale_est should be one of qn or scaleTau2.")
+	if(sum(na.x)!=sum(na.y)) 	stop("Number of observations in x and y are not equal.")
+	if(sum(na.x)<(p+1)) 		stop("Not enough observations with non-missing values.")
+	n<-nrow(x)
+	p<-ncol(x)
+	hf<-ceiling((n+p+1)/2)
+	if(is.numeric(alpha) & !is.numeric(h)){
+		alpha<-sort(alpha)
+		if(min(alpha)>=0.5 & max(alpha)<=1){
+			h<-sort(quanf(alpha,n=n,p=p+intercept))
+		} else {
+			stop("Error: invalid alpha value")
+		}
+	}
+	if(is.numeric(h)) {
+		h<-sort(h)
+		if(min(h)<hf | max(h)>n) stop(paste("The smallest h should be at least ",hf," and at most ",n,sep=""))
+	}
+	if(is.null(alpha) & is.null(h)) {
+		alpha<-0.75
+		h<-quanf(alpha,n = n,p = p + intercept)
+		print("alpha was set to 0.75 [default]")
+	}
+	if(!is.numeric(alpha) & !is.numeric(h)) {
+		alpha<-0.75
+		h<-quanf(alpha,n = n,p = p + intercept)
+		print("alpha was set to 0.75 [default]")
+	}
+	if(min(h)<n){
+		out2<-detlts_in9_dmcd(x=x,y=y,intercept=intercept,scale_est=scale_est,alpha=alpha)
+	}
+	out2
+}
+detlts_in9_dmcd<-function(
+				x,
+				y,
+				intercept=1,
+				scale_est='scaleTau2',
+				alpha
+			){
+#x=x;y=y;intercept=1;alpha=0.5;scale_est="scaleTau2";h<-66
+    n <- nrow(x)
+    p <- ncol(x)
+	if(is.null(alpha))	alpha<-0.5
+	if(!is.numeric(alpha))	alpha<-0.5
+	h<-quanf(alpha,n=n,p=p+intercept)
+    if (svd(scale(x))$d[p]<1e-07)  stop("x is singular")
+	h0<-ceiling(n/2)+1
+	datao<-cbind(x,y)
+	a2<-vector("list",4)
+	a2[[1]]<-vector("list",1);
+	a2[[2]]<-NA
+	a2[[3]]<-a2[[1]][[1]]<-rep(NA,h)
+	clm<-apply(datao,2,median)
+	if(mean(is.finite(clm))==1){
+		scl<-apply(datao,2,scale_est)
+		if(min(scl)>1e-7){
+		   	datao<-sweep(datao,2,clm,FUN='-')
+			datao<-sweep(datao,2,scl,FUN='/')
+			#CXY_in<-try(covMcd(datao,nsamp='deterministic',scalefn=eval(parse(text=scale_est)),alpha=alpha))	
+			CXY_in<-try(covMcd(datao,nsamp='deterministic',scalefn=eval(parse(text=scale_est)),alpha=alpha))	
+			if(abs(CXY_in$crit)<1e8){
+				CXY<-CXY_in$raw.cov
+				beta<-try(solve(CXY[1:p,1:p])%*%CXY[1:p,p+1])
+				if(mean(is.finite(beta))==1){
+					data2<-sweep(datao,2,CXY_in$raw.center,FUN='-')
+					diY<-abs(data2[,p+1]-data2[,1:p]%*%beta)
+					fit2<-.C("R_extCstep",
+						as.integer(n),			#01
+						as.integer(p+1),		#02
+						as.double(data2),		#03
+						as.integer(h),			#04
+						as.double(diY),			#05
+						as.double(rep(0,2)),		#06
+						as.integer(rep(0,2)),		#07
+						as.integer(rep(0,h)),		#08
+					PACKAGE="DetR")	
+					a2[[2]]<-fit2[[6]][1]
+					a2[[1]][[1]]<-fit2[[8]]
+					names(a2)<-c("Subset","Objective","Raw","SubsetSize")
+					a2[[4]]<-h
+					names(a2[[1]])<-c(paste0("ActiveSubsetSize_",h))
+					a2[[3]]<-which(diY<=median(diY))
+				}
+			}
+		}
+	} else {
+		a1<-which.min(scl)
+		a2[[2]]<-0
+		a2[[3]]<-a2[[1]][[1]]<-which(abs(datao)<1e-8)
+	}
+    return(a2)
+}
+unimcd<-function(
+			y,
+			h,
+			len
+		){
+	inloc<-inmean<-incov<-0.0;
+	out<-.C("R_unimcd",
+		as.double(y),
+		as.integer(h),
+		as.integer(len),
+		as.integer(length(y)),
+		as.double(inmean),
+		as.double(incov),
+		as.integer(inloc),
+	PACKAGE="DetR")
+	list(initmean=as.numeric(out[[5]]),initcov=as.numeric(out[[6]]),iloc=as.numeric(out[[7]]))
+}
+fxOGK<-function(
+			Data,
+			scale_est="qn",
+			intercept=1,
+			h,
+			doCsteps=1
+		){
+	p<-ncol(Data)
+	n<-nrow(Data)
+	H0<-rep(0,min(h))
+	lh<-length(h)
+	Q<-matrix(0,n,lh)
 	citer<-ovec<-rep(0,lh)
-    Mtype <- match(scale_est, c("Qn", "scaleTau2"))[1]
-    if (is.na(Mtype)) 
-        stop("scale_est should be one of Qn or scaleTau2.")
-    Mtype <- Mtype - 1
+	Mtype<-match(scale_est,c("qn","scaleTau2"))[1]
+	if(is.na(Mtype))	stop("scale_est should be one of qn or scaleTau2.")
+	Mtype<-Mtype-1
 	W<-rep(0,p)
-    fit2 <- .C("R_FastOGK",
+	fit2<-.C("R_FastOGK",
 		as.integer(n),			#01
 		as.integer(p),			#02
-		as.double(Data), 		#03
+		as.double(Data),		#03
 		as.integer(Q),			#04
 		as.integer(Mtype),		#05
 		as.integer(intercept),		#06
@@ -28,83 +181,74 @@ fxOGK<-function (Data, scale_est = "Qn", intercept=1,h,doCsteps=1) {
 		as.integer(h),			#08
 		as.integer(lh),			#09
 		as.integer(H0),			#10
-		as.integer(h0),			#11
-		as.double(ovec),		#12
-		as.integer(doCsteps),		#13
-		as.integer(citer),		#14
+		as.double(ovec),		#11
+		as.integer(doCsteps),		#12
+		as.integer(citer),		#13
+		as.integer(0),			#14
 	PACKAGE="DetR")
-	list(bestCStep=fit2[[4]],HasZeroScale=fit2[[7]],bestRaw=fit2[[10]],Objective=fit2[[12]],citer=fit2[[14]])
+	list(bestCStep=fit2[[4]],HasZeroScale=fit2[[7]],HasZeroDet=fit2[[14]],bestRaw=fit2[[10]],Objective=fit2[[11]],citer=fit2[[13]])
 }
-quanf<-function(alpha,n,p) return(floor(2*floor((n+p+1)/2)-n+2*(n-floor((n+p+1)/2))*alpha))
-#This code computes 'h' (it's an R translation of the one found in LIBRA).
-DetLTS_raw<-function (x, y, intercept = 1, alpha = 0.75, h = NULL, scale_est = "scaleTau2",doCsteps=1){
-    y <- as.matrix(y)
-    x <- as.matrix(x)
-    x <- data.matrix(x)
-    n <- nrow(x)
-    p <- ncol(x)
-    q <- ncol(y)
-    if (is.numeric(intercept) == 0) 
-        stop("intercept should be set to either 1 or 0.")
-    if (sum(intercept == c(0, 1)) == 0) 
-        stop("intercept should be set to either 1 or 0.")
-    if (q > 1) 
-        stop("y is not one-dimensional.")
-    na.x <- complete.cases(x)
-    na.y <- complete.cases(y)
+quanf<-function(n,p,alpha) return(floor(2*floor((n+p+1)/2)-n+2*(n-floor((n+p+1)/2))*alpha))
+DetLTS_raw<-function(
+				x,
+				y,
+				intercept=1,
+				alpha=0.75,
+				h=NULL,
+				scale_est="scaleTau2",
+				doCsteps=1
+			){
+	y<-as.matrix(y)
+	x<-as.matrix(x)
+	x<-data.matrix(x)
+	n<-nrow(x)
+	p<-ncol(x)
+	q<-ncol(y)
+	if(is.numeric(intercept)==0)	stop("intercept should be set to either 1 or 0.")
+	if(sum(intercept==c(0,1))==0) 	stop("intercept should be set to either 1 or 0.")
+	if(q>1)				stop("y is not one-dimensional.")
+	na.x<-complete.cases(x)
+	na.y<-complete.cases(y)
 	if(min(c(sum(na.y),sum(na.x)))<n)	stop("x or y contain missing data. Remove the rows with missing data.")
-    Mtype <- match(scale_est, c("Qn", "scaleTau2"))[1]
-    if (is.na(Mtype)) 
-        stop("scale_est should be one of Qn or scaleTau2.")
-    if (sum(na.x) != sum(na.y)) 
-        stop("Number of observations in x and y are not equal.")
-    if (sum(na.x) < (p + 1)) 
-        stop("Not enough observations with non-missing values.")
-    n <- nrow(x)
-    p <- ncol(x)
-    hf <- ceiling((n + p + 1)/2)
-    if (is.numeric(alpha) & !is.numeric(h)) {
-        alpha <- sort(alpha)
-        if (min(alpha) >= 0.5 & max(alpha) <= 1) {
-            h <- sort(quanf(alpha, n = n, p = p + intercept))
-        }
-        else {
-            stop("Error: invalid alpha value")
-        }
-    }
-    if (is.numeric(h)) {
-        h <- sort(h)
-        if (min(h) < hf | max(h) > n) 
-            stop(paste("The smallest h should be at least ", 
-                hf, " and at most ", n, sep = ""))
-    }
-    if (is.null(alpha) & is.null(h)) {
-        alpha <- 0.75
-        h <- quanf(alpha, n = n, p = p + intercept)
-        print("alpha was set to 0.75 [default]")
-    }
-    if (!is.numeric(alpha) & !is.numeric(h)) {
-        alpha <- 0.75
-        h <- quanf(alpha, n = n, p = p + intercept)
-        print("alpha was set to 0.75 [default]")
-    }
-    if (min(h) < n) {
-        out2 <- detlts_in9(x = x, y = y, intercept = intercept, 
-            scale_est = scale_est,h=h,doCsteps=doCsteps)
-    }
-
-#    if (length(out2) == 1) 
-#        out2 <- out2[[1]]
-    out2
+	Mtype<-match(scale_est,c("qn","scaleTau2"))[1]
+	if(is.na(Mtype))		stop("scale_est should be one of qn or scaleTau2.")
+	if(sum(na.x)!=sum(na.y)) 	stop("Number of observations in x and y are not equal.")
+	if(sum(na.x)<(p+1)) 		stop("Not enough observations with non-missing values.")
+	n<-nrow(x)
+	p<-ncol(x)
+	hf<-ceiling((n+p+1)/2)
+	if(is.numeric(alpha) & !is.numeric(h)) {
+		alpha<-sort(alpha)
+		if(min(alpha)>=0.5 & max(alpha)<=1){
+			h<-sort(quanf(alpha,n=n,p=p+intercept))
+		} else {
+			stop("Error: invalid alpha value")
+		}
+	}
+	if(is.numeric(h)) {
+		h<-sort(h)
+		if(min(h)<hf | max(h)>n) stop(paste("The smallest h should be at least ",hf," and at most ",n,sep=""))
+	}
+	if(is.null(alpha) & is.null(h)) {
+		alpha<-0.75
+		h<-quanf(alpha,n = n,p = p + intercept)
+		print("alpha was set to 0.75 [default]")
+	}
+	if(!is.numeric(alpha) & !is.numeric(h)) {
+		alpha<-0.75
+		h<-quanf(alpha,n = n,p = p + intercept)
+		print("alpha was set to 0.75 [default]")
+	}
+	if(min(h)<n){
+		out2<-detlts_in9(x=x,y=y,intercept=intercept,scale_est = scale_est,h=h,doCsteps=doCsteps)
+	}
+	out2
 }
-ordreg<-function(x,y,intercept){
-	#this is classical OLS, but with the same outputs as DetLTS 
-	#(so that it is compatible with the auxiliary functions for 
-	#plotting the outputs of DetLTS for several values of h).
-	#Mia asked for this. The variable names in ordereg are the 
-	#the same as in LIBRA (if the names do not conflict with 
-	#other R protected functions --otherwise I capitalized the 
-	#function names). 
+ordreg<-function(
+			x,
+			y,
+			intercept
+		){
 	n<-nrow(x)
 	if(intercept)	x<-cbind(1,x)
 	p<-ncol(x)
@@ -129,29 +273,24 @@ ordreg<-function(x,y,intercept){
 	cutoff=qnorm(0.9875),
 	flag=rep(1,n),X=x,y=y)
 }
-detlts_in9<-function (x, y, intercept, scale_est,h,doCsteps=doCsteps) {
+detlts_in9<-function(
+				x,
+				y,
+				intercept,
+				scale_est,
+				h,
+				doCsteps=doCsteps
+			){
 #x=x;y=y;intercept=1;alpha=0.5;scale_est="scaleTau2";h<-c(66,76,86)
-    n <- nrow(x)
-    p <- ncol(x)
-    if (svd(scale(x))$d[p] < 1e-07) 
-        stop("x is singular")
-#    if (intercept) {
-#        datamed <- c(colMedians(x), median(y))
-#        x <- sweep(x, 2, datamed[1:p], check.margin = FALSE)
-#        y <- y - datamed[p + 1]
-#    }
-#    datao <- cbind(x, y)
-#    datasca <- apply(datao, 2, scale_est)
-#    x <- sweep(x, 2, datasca[1:p], FUN = "/", check.margin = FALSE)
-#    y <- y/datasca[p + 1]
-    datao <- cbind(x, y)
-    CXY <- fxOGK(Data=datao,scale_est=scale_est,intercept=intercept,h=h,doCsteps=doCsteps)
-	if(sum(CXY$HasZeroScale[1:p])>0){
-		stop(paste0("Column ",which(CXY$HasZeroScale>0)," of the design matrix have 0 value of ", scale_est))
-	}
-	if(CXY$HasZeroScale[p+1]>0){
-		stop(paste0("The response vector has 0 value of ", scale_est))
-	}
+	n<-nrow(x)
+	p<-ncol(x)
+	if(svd(scale(x))$d[p]<1e-07)	stop("x is singular")
+
+	datao<-cbind(x,y)
+	CXY<-fxOGK(Data=datao,scale_est=scale_est,intercept=intercept,h=h,doCsteps=doCsteps)
+	if(sum(CXY$HasZeroScale[1:p])>0)stop(paste0("Column ",which(CXY$HasZeroScale>0)," of the design matrix have 0 value of ",scale_est))
+	if(CXY$HasZeroScale[p+1]>0)	stop(paste0("The response vector has 0 value of ",scale_est))
+	if(CXY$HasZeroDet==0)		stop("The data is not in general position.")
 	lh<-length(h)
 	a2<-vector("list",4)
 	a2[[1]]<-vector("list",lh);
@@ -166,10 +305,19 @@ detlts_in9<-function (x, y, intercept, scale_est,h,doCsteps=doCsteps) {
 	a2[[4]]<-h
 	names(a2[[1]])<-c(paste0("ActiveSubsetSize_",h))
 	a2[[3]]<-CXY$bestRaw
-    return(a2)
+	return(a2)
 }
-ltscheckout<-function(x,y,inbest,h,intercept,alpha,use.correction=TRUE,objfct){
-	#this code does the reweighting, consistency and small sample correction given 
+ltscheckout<-function(
+				x,
+				y,
+				inbest,
+				h,
+				intercept,
+				alpha,
+				use.correction=TRUE,
+				objfct
+			){
+	#this code does the reweighting,consistency and small sample correction given 
 	#a list containing the indexes of the h observations awarded a positive weight 
 	#at the end of the lts algorithm.
 
@@ -177,8 +325,8 @@ ltscheckout<-function(x,y,inbest,h,intercept,alpha,use.correction=TRUE,objfct){
 	#objfct: 	so that this function returns the objective function of the subset before the reweighting/adjustments 
 	#		(as in robustbase/LIBRA).
 
-	#the rest of the code/variable names are taken from robustbase::ltsReg (see maintenair in citation("robustbase")).
-	#the only differences is that I'm abiding by the R convention of putting the intercept first (instead of last as 
+	#the rest of the code/variable names are taken from robustbase::ltsReg(see maintener in citation("robustbase")).
+	#the only differences is that I'm abiding by the R convention of putting the intercept first(instead of last as 
 	#is dones in LIBRA and robustbase). 
  	raw.cnp2<-rep(1,2)
 	cnp2<-rep(1,2)
@@ -220,7 +368,7 @@ ltscheckout<-function(x,y,inbest,h,intercept,alpha,use.correction=TRUE,objfct){
 		fitted<-x%*%z1$coef
 		resid<-z1$residuals
 		ans$scale<-sqrt(sum(weights*resid^2)/(sum.w-1))
-		if (sum.w==n) {
+		if(sum.w==n) {
 		cdelta.rew<-1
 		correct.rew<-1
 		} else {
@@ -235,7 +383,7 @@ ltscheckout<-function(x,y,inbest,h,intercept,alpha,use.correction=TRUE,objfct){
 	}
 	## unneeded: names(ans$coefficients)<-names(ans$raw.coefficients)
 	ans$crit<-objfct
-	if (intercept) {
+	if(intercept) {
 		sh<-unimcd(y=y,h=h,len=n-h+1)$initcov
 		iR2<-(sh0**2/sh)
 	} else {
@@ -262,7 +410,12 @@ ltscheckout<-function(x,y,inbest,h,intercept,alpha,use.correction=TRUE,objfct){
 	class(ans)<-"lts"
 	return(ans)
 }
-LTScnp2<-function(p,intercept=intercept,n,alpha){
+LTScnp2<-function(
+			p,
+			intercept=intercept,
+			n,
+			alpha
+		){
 	#This function was taken from robustbase. See citation("robustbase").
 	stopifnot(0.5<=alpha,alpha<=1)
 	if(intercept)	p<-p-1
@@ -315,7 +468,12 @@ LTScnp2<-function(p,intercept=intercept,n,alpha){
 	}## else(p>=1)
 	return(1/fp.alpha.n)
 } ## LTScnp2
-LTScnp2.rew<-function(p,intercept=intercept,n,alpha){
+LTScnp2.rew<-function(
+				p,
+				intercept=intercept,
+				n,
+				alpha
+			){
 	#This function was taken from robustbase. See citation("robustbase").
 	stopifnot(0.5<=alpha,alpha<=1)
 	if(intercept) p<-p-1
@@ -365,185 +523,641 @@ LTScnp2.rew<-function(p,intercept=intercept,n,alpha){
 	}## else(p>=1)
 	return(1/fp.alpha.n)
 } ## LTScnp2.rew
-#lightly modified code, originally 
+#lightly modified code,originally 
 #from http://www.stat.ubc.ca/~matias/fasts.txt
-our.solve <- function(a,b) {
-    a <- qr(a)
-    da <- dim(a$qr)
-    if(a$rank < (p <- da[2]))
-        return(NA)
-    else qr.coef(a, b)
+our.solve<-function(a,b) {
+	a<-qr(a)
+	da<-dim(a$qr)
+	if(a$rank <(p<-da[2]))
+		return(NA)
+	else qr.coef(a,b)
 }
-rho_fastS <- function(u, cc=cc) {
-    w <- abs(u)<=cc
-    v <- (u^2/(2)*(1-(u^2/(cc^2))+(u^4/(3*cc^4))))*w +(1-w)*(cc^2/6)
-    v <- v*6/cc^2
-    return(v)
+rho_fastS<-function(u,cc=cc) {
+	w<-abs(u)<=cc
+	v<-(u^2/(2)*(1-(u^2/(cc^2))+(u^4/(3*cc^4))))*w +(1-w)*(cc^2/6)
+	v<-v*6/cc^2
+	return(v)
 }
-norm_fastS <- function(x) sqrt( sum( x^2 ) )
-loss.S <- function(u,s,cc) mean(rho_fastS(u/s,cc) )
-f.w <- function(u, cc){
-        # weight function = psi(u)/u
-        tmp <- (1 - (u/cc)^2)^2
-        tmp[ abs(u/cc) > 1 ] <- 0
-        return(tmp)
+norm_fastS<-function(x) sqrt( sum( x^2 ) )
+loss.S<-function(u,s,cc) mean(rho_fastS(u/s,cc) )
+f.w<-function(u,cc){
+		# weight function = psi(u)/u
+		tmp<-(1 -(u/cc)^2)^2
+		tmp[ abs(u/cc) > 1 ]<-0
+		return(tmp)
 }
-re.s <- function(x,y,initial.beta,initial.scale,k,conv,b,cc) {
-    # does "k" IRWLS refining steps from "initial.beta"
-    #
-    # if "initial.scale" is present, it's used, o/w the MAD is used
-    # k = number of refining steps
-    # conv = 0 means "do k steps and don't check for convergence"
-    # conv = 1 means "stop when convergence is detected, or the
-    #                 maximum number of iterations is achieved"
-    # b and cc = tuning constants of the equation
-    # 
-
-  
-
-    n <- dim(x)[1]
-    p <- dim(x)[2]
-    res <- y - x %*% initial.beta
-    if( missing( initial.scale ) ) 
-        initial.scale <- scale <- median(abs(res))/.6745
-    else
-        scale <- initial.scale
-    
-    if( conv == 1) k <- 50
-    #
-    # if conv == 1 then set the max no. of iterations to 50
-    # magic number alert!!!
-    
-    beta <- initial.beta
-
-    lower.bound <- median(abs(res))/cc
-
-    
-    for(i in 1:k) {
-        # do one step of the iterations to solve for the scale
-        scale.super.old <- scale
-        #lower.bound <- median(abs(res))/1.56
-        scale <- sqrt( scale^2 * mean( rho_fastS( res / scale, cc ) ) / b     )
-        # now do one step of IRWLS with the "improved scale"
-        weights <- f.w( res/scale, cc )
-        W <- matrix(weights, n, p)
-        xw <- x * sqrt(W)
-        yw <- y *   sqrt(weights)
-        beta.1 <- our.solve( t(xw) %*% xw ,t(xw) %*% yw )
-        if(any(is.na(beta.1))) { beta.1 <- initial.beta
-                                    scale <- initial.scale
-                                     break
-        }
-        if( (conv==1) )
-        {
-            # check for convergence
-            if( norm_fastS( beta - beta.1 ) / norm_fastS(beta) < 1e-20 ) break
-            # magic number alert!!!
-        }
-        res <- y - x %*% beta.1
-        beta <- beta.1
-    }
-    
-    res <- y - x %*% beta
-    # get the residuals from the last beta
-    return(list(beta.rw = beta.1, scale.rw = scale))
-    
+re.s<-function(
+			x,
+			y,
+			initial.beta,
+			initial.scale,
+			k,conv,
+			b,
+			cc
+		){
+	# does "k" IRWLS refining steps from "initial.beta"
+	#
+	# if "initial.scale" is present,it's used,o/w the MAD is used
+	# k = number of refining steps
+	# conv = 0 means "do k steps and don't check for convergence"
+	# conv = 1 means "stop when convergence is detected,or the
+	#				 maximum number of iterations is achieved"
+	# b and cc = tuning constants of the equation
+	# 
+	n<-dim(x)[1]
+	p<-dim(x)[2]
+	res<-y - x %*% initial.beta
+	if( missing( initial.scale ) ) 
+		initial.scale<-scale<-median(abs(res))/.6745
+	else
+		scale<-initial.scale
+	
+	if( conv == 1) k<-50
+	#
+	# if conv == 1 then set the max no. of iterations to 50
+	# magic number alert!!!
+	beta<-initial.beta
+	lower.bound<-median(abs(res))/cc
+	for(i in 1:k) {
+		# do one step of the iterations to solve for the scale
+		scale.super.old<-scale
+		#lower.bound<-median(abs(res))/1.56
+		scale<-sqrt( scale^2 * mean( rho_fastS( res / scale,cc ) ) / b	 )
+		# now do one step of IRWLS with the "improved scale"
+		weights<-f.w( res/scale,cc )
+		W<-matrix(weights,n,p)
+		xw<-x * sqrt(W)
+		yw<-y *   sqrt(weights)
+		beta.1<-our.solve( t(xw) %*% xw ,t(xw) %*% yw )
+		if(any(is.na(beta.1))){ 
+			beta.1<-initial.beta
+			scale<-initial.scale
+			break
+		}
+		if((conv==1)){
+			# check for convergence
+			if( norm_fastS( beta - beta.1 ) / norm_fastS(beta) < 1e-20 ) break
+			# magic number alert!!!
+		}
+		res<-y - x %*% beta.1
+		beta<-beta.1
+	}
+	res<-y - x %*% beta
+	# get the residuals from the last beta
+	return(list(beta.rw = beta.1,scale.rw = scale))
 }
-scale1 <- function(u, b, cc, initial.sc=median(abs(u))/.6745) {
-        # find the scale, full iterations
-        max.it <- 200
-        # magic number alert
-        #sc <- median(abs(u))/.6745
-        sc <- initial.sc
-        i <- 0
-        eps <- 1e-20
-        # magic number alert
-        err <- 1
-        while( ( (i <- i+1) < max.it ) && (err > eps) ) {
-            sc2 <- sqrt( sc^2 * mean( rho_fastS( u / sc, cc ) ) / b   )
-            err <- abs(sc2/sc - 1)
-            sc <- sc2
-        }
-        return(sc)
+scale1<-function(
+			u,
+			b,
+			cc,
+			initial.sc=median(abs(u))/.6745
+		){
+		# find the scale,full iterations
+		max.it<-200
+		# magic number alert
+		#sc<-median(abs(u))/.6745
+		sc<-initial.sc
+		i<-0
+		eps<-1e-20
+		# magic number alert
+		err<-1
+		while(((i<-i+1) < max.it ) &&(err > eps) ) {
+			sc2<-sqrt( sc^2 * mean( rho_fastS( u / sc,cc ) ) / b   )
+			err<-abs(sc2/sc - 1)
+			sc<-sc2
+		}
+		return(sc)
 }
-fast.s <- function(x, y, int=1, H1,k=2,best.r=5, b=.5, cc=1.56, seed,conv=1) {
+fast.s<-function(
+			x,
+			y,
+			int=1,
+			H1,
+			k=2,
+			best.r=5,
+			b=.5,
+			cc=1.56,
+			seed,
+			conv=1
+		){
 	N<-1
-    #
-    # int = 1 -> add a column of ones to x
-    # N = cant de sub-samples
-    # k = number of refining iterations in ea. 
-    #     subsample
-    # k = 0 means "raw-subsampling"
-    # b = right hand side of the equation
-    # cc = corresponding tuning constant
-    # best.r = number of "best betas" to remember
-    #          from the subsamples. These will be later
-    #          iterated until convergence
+	#
+	# int = 1 -> add a column of ones to x
+	# N = cant de sub-samples
+	# k = number of refining iterations in ea. 
+	#	 subsample
+	# k = 0 means "raw-subsampling"
+	# b = right hand side of the equation
+	# cc = corresponding tuning constant
+	# best.r = number of "best betas" to remember
+	#		  from the subsamples. These will be later
+	#		  iterated until convergence
 
 
-    # conv = 0 means "do k steps and don't check for convergence"
-    # conv = 1 means "stop when convergence is detected, or the
-    #                 maximum number of iterations is achieved"
+	# conv = 0 means "do k steps and don't check for convergence"
+	# conv = 1 means "stop when convergence is detected,or the
+	#				 maximum number of iterations is achieved"
 
-    # the objective function, we solve loss.S(u,s,cc)=b for "s"
- 
-
-
-
-
-    
-    n <- dim(x)[1]
-    p <- dim(x)[2]
-    
-    if( int == 1) {
-            x <- cbind(rep(1,n), x)
-            p <- p + 1
-    }
-
-    if(!missing(seed)) set.seed(seed)
-
-    best.betas <- matrix(0, best.r, p)
-    best.scales <- rep(1e20, best.r)
-    s.worst <- 1e20
-    n.ref <- 1
-    
-
-        #
-        # get a subsample
-        #
-
-	xs <- x[H1,]
-	ys <- y[H1]
-	beta <- our.solve(xs,ys)
-
-        if(k>0) { 
-            # do the refining
-            tmp <- re.s(x=x,y=y,initial.beta=beta,k=k,conv=conv,b=b,cc=cc)
-            beta.rw <- tmp$beta.rw
-            scale.rw <- tmp$scale.rw
-            res.rw <- y - x %*% beta.rw
-        } else { #k = 0 means "no refining"
-            beta.rw <- beta
-            res.rw <- y - x %*% beta.rw
-            scale.rw <- median(abs(res.rw))/.6745
-        }
-
-
-                best.scales[best.r]  <- scale1(res.rw,b,cc,scale.rw)
-                best.betas[best.r,] <- beta.rw
-
-    # do the complete refining step until convergence (conv=1) starting
-    # from the best subsampling candidate (possibly refined)
-    super.best.scale <- Inf
-    # magic number alert
-    for(i in best.r:1) {
-        tmp <- re.s(x=x,y=y,initial.beta=best.betas[i,],
-                initial.scale=best.scales[i],k=k,conv=conv,b=b,cc=cc)
-        if(tmp$scale.rw < super.best.scale) {
-            super.best.scale <- tmp$scale.rw
-            super.best.beta <- tmp$beta.rw
-        }   
-    }
-    return(list(as.vector(super.best.beta), super.best.scale))
-
+	# the objective function,we solve loss.S(u,s,cc)=b for "s"
+	n<-dim(x)[1]
+	p<-dim(x)[2]
+	if(int==1){
+		x<-cbind(rep(1,n),x)
+		p<-p+1
+	}
+	if(!missing(seed)) set.seed(seed)
+	best.betas<-matrix(0,best.r,p)
+	best.scales<-rep(1e20,best.r)
+	s.worst<-1e20
+	n.ref<-1
+	xs<-x[H1,]
+	ys<-y[H1]
+	beta<-our.solve(xs,ys)
+	if(k>0){ 
+		# do the refining
+		tmp<-re.s(x=x,y=y,initial.beta=beta,k=k,conv=conv,b=b,cc=cc)
+		beta.rw<-tmp$beta.rw
+		scale.rw<-tmp$scale.rw
+		res.rw<-y - x %*% beta.rw
+	} else { #k = 0 means "no refining"
+		beta.rw<-beta
+		res.rw<-y - x %*% beta.rw
+		scale.rw<-median(abs(res.rw))/.6745
+	}
+	best.scales[best.r] <-scale1(res.rw,b,cc,scale.rw)
+	best.betas[best.r,]<-beta.rw
+	# do the complete refining step until convergence(conv=1) starting
+	# from the best subsampling candidate(possibly refined)
+	super.best.scale<-Inf
+	# magic number alert
+	for(i in best.r:1) {
+		tmp<-re.s(x=x,y=y,initial.beta=best.betas[i,],initial.scale=best.scales[i],k=k,conv=conv,b=b,cc=cc)
+		if(tmp$scale.rw<super.best.scale){
+			super.best.scale<-tmp$scale.rw
+			super.best.beta<-tmp$beta.rw
+		}   
+	}
+	return(list(as.vector(super.best.beta),super.best.scale))
+}
+fx01<-function(
+			n=600,
+			varepsilon=0.4,
+			badlvg=TRUE
+		){
+	Sigma_u<-structure(c(1,0.904931044266155,0.904931044266153,0.904931044266154,
+0.904931044266153,0.904931044266154,0.904931044266153,0.904931044266154,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266154,0.904931044266154,
+0.904931044266153,0.904931044266154,0.904931044266154,0.904931044266154,
+0.904931044266154,0.904931044266153,0.904931044266154,0.904931044266154,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266154,
+0.904931044266153,0.904931044266154,0.904931044266153,0.904931044266154,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266154,0.904931044266153,0.904931044266154,0.904931044266153,
+0.904931044266155,0.999999999999986,0.904931044266154,0.904931044266154,
+0.904931044266154,0.904931044266154,0.904931044266154,0.904931044266156,
+0.904931044266154,0.904931044266154,0.904931044266154,0.904931044266154,
+0.904931044266154,0.904931044266154,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266151,0.904931044266153,0.904931044266152,
+0.904931044266151,0.904931044266151,0.904931044266151,0.904931044266151,
+0.904931044266152,0.904931044266151,0.904931044266151,0.904931044266152,
+0.904931044266151,0.904931044266151,0.904931044266151,0.904931044266151,
+0.904931044266151,0.904931044266151,0.904931044266151,0.904931044266151,
+0.904931044266153,0.904931044266154,1,0.904931044266153,0.904931044266153,
+0.904931044266154,0.904931044266153,0.904931044266154,0.904931044266152,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266152,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266152,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266154,
+0.904931044266154,0.904931044266153,1,0.904931044266152,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266153,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266153,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266153,0.904931044266154,
+0.904931044266153,0.904931044266152,1,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266153,
+0.904931044266153,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266153,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266154,0.904931044266154,0.904931044266154,
+0.904931044266153,0.904931044266153,1,0.904931044266153,0.904931044266151,
+0.904931044266154,0.904931044266152,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266152,0.904931044266154,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266153,0.904931044266154,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,1,0.904931044266153,0.904931044266153,
+0.904931044266152,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266154,
+0.904931044266156,0.904931044266154,0.904931044266153,0.904931044266153,
+0.904931044266151,0.904931044266153,1,0.904931044266153,0.904931044266154,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266154,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266154,
+0.904931044266153,0.904931044266153,1,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266153,
+0.904931044266153,0.904931044266152,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266153,0.904931044266154,0.904931044266153,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266154,0.904931044266152,1,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266152,0.904931044266153,0.904931044266153,
+0.904931044266152,0.904931044266153,0.904931044266152,0.904931044266153,
+0.904931044266153,0.904931044266152,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266153,0.904931044266154,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266152,0.904931044266153,1,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266153,
+0.904931044266154,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266152,1,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266153,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266153,0.904931044266154,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266153,1,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266153,0.904931044266154,0.904931044266153,
+0.904931044266153,0.904931044266152,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266153,1,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266152,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266152,0.904931044266153,0.904931044266153,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266153,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266154,0.904931044266153,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266152,0.904931044266153,
+0.904931044266153,0.904931044266153,1,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266152,0.904931044266153,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266154,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,1,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266153,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266153,0.904931044266153,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266152,0.904931044266152,
+0.904931044266153,0.904931044266153,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266153,0.904931044266152,0.904931044266153,
+0.904931044266153,0.904931044266153,1,0.904931044266152,0.904931044266152,
+0.904931044266153,0.904931044266153,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266154,0.904931044266153,0.904931044266152,
+0.904931044266152,0.904931044266153,0.904931044266154,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266153,
+0.904931044266153,0.904931044266152,1,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266154,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266152,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266152,0.904931044266153,1,0.904931044266153,0.904931044266153,
+0.904931044266152,0.904931044266153,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266154,
+0.904931044266153,0.904931044266153,0.904931044266152,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266152,0.904931044266152,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,1,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266154,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266152,
+0.904931044266152,0.904931044266153,0.904931044266152,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,1,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266153,0.904931044266151,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,1,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266154,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266152,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266153,0.904931044266153,0.904931044266153,
+0.904931044266153,0.904931044266152,1,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266154,
+0.904931044266152,0.904931044266153,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266153,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266153,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,1,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266153,0.904931044266151,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266153,0.904931044266153,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266153,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266153,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,1,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266153,0.904931044266151,0.904931044266153,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266153,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,1,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266153,0.904931044266151,0.904931044266153,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266153,0.904931044266153,
+0.904931044266152,0.904931044266153,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,1,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266154,
+0.904931044266151,0.904931044266153,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266153,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,1,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266153,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,1,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266154,0.904931044266151,0.904931044266153,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266153,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,1,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266153,0.904931044266151,0.904931044266153,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,1,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266154,
+0.904931044266152,0.904931044266153,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266153,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,1,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266153,0.904931044266151,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266153,0.904931044266153,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266153,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,1,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266153,0.904931044266151,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266153,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,1,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266153,0.904931044266151,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266153,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,1,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266153,
+0.904931044266151,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,1,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266154,0.904931044266151,
+0.904931044266152,0.904931044266153,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266153,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266153,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,1,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266153,0.904931044266151,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266153,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,1,0.904931044266152,0.904931044266152,
+0.904931044266154,0.904931044266151,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266153,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,1,0.904931044266152,0.904931044266153,
+0.904931044266151,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266153,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,0.904931044266152,0.904931044266152,
+0.904931044266152,0.904931044266152,1),.Dim = c(40L,40L))
+	p<-ncol(Sigma_u)
+	Sigma_c<-Sigma_u*1e-4
+	mu_c<-mu_u<-rep(0,p)
+	if(badlvg){
+		mu_c<-c(2.85368854921023,-21.4715728094438,2.45645152168719,2.30802344869438,
+	2.34753499153963,2.34281914630868,2.3471235928145,4.00457664508059,
+	2.34729652028077,2.34267320908206,2.34268910273142,2.34713959813773,
+	2.34713959813773,2.34712364492354,0.912568273192245,0.916704459120832,
+	0.485210767128272,0.485211238436121,0.487734912827138,0.484678325415934,
+	0.487735385535563,-0.746093646117419,0.485180282592723,-0.747088549884403,
+	-0.746093172695671,-0.74610888977622,-0.745527880085902,-0.746108889776235,
+	-0.746108889776216,-0.747072832812809,-0.746108888382507,-0.746093172695687,
+	-0.745543595772043,-0.746093172695681,-1.17522500163449,-1.17524072149627,
+	-1.17524072149626,-1.1763708284173,-1.17637082842281,-1.17524072149627)
+	}
+	labels<-rep(1,n)
+	labels[1:(n*varepsilon)]<-0
+	Data<-matrix(NA,n,p)
+	Data[labels==1,]<-MASS::mvrnorm(sum(labels),mu_u,Sigma_u)
+	Data[labels==0,]<-MASS::mvrnorm(sum(!labels),mu_c,Sigma_c)
+	list(Data=Data,labels=labels,Sigma_u=Sigma_u)
+}
+fx01b<-function(
+			n=600,
+			varepsilon=0.4,
+			badlvg=TRUE
+		){
+	Sigma_u<-structure(c(1,0.911285349117428,0.911285349117428,0.911285349117428,
+		0.911285349117428,0.911285349117428,0.911285349117428,0.911285349117428,
+		0.911285349117428,0.911285349117428,0.911285349117428,0.999999999999999,
+		0.911285349117427,0.911285349117427,0.911285349117427,0.911285349117428,
+		0.911285349117428,0.911285349117427,0.911285349117428,0.911285349117428,
+		0.911285349117428,0.911285349117427,1,0.911285349117428,0.911285349117427,
+		0.911285349117428,0.911285349117428,0.911285349117428,0.911285349117427,
+		0.911285349117427,0.911285349117428,0.911285349117427,0.911285349117428,
+		1,0.911285349117427,0.911285349117428,0.911285349117428,0.911285349117428,
+		0.911285349117428,0.911285349117428,0.911285349117428,0.911285349117427,
+		0.911285349117427,0.911285349117427,0.999999999999999,0.911285349117427,
+		0.911285349117427,0.911285349117427,0.911285349117427,0.911285349117427,
+		0.911285349117428,0.911285349117428,0.911285349117428,0.911285349117428,
+		0.911285349117427,1,0.911285349117427,0.911285349117427,0.911285349117427,
+		0.911285349117427,0.911285349117428,0.911285349117428,0.911285349117428,
+		0.911285349117428,0.911285349117427,0.911285349117427,1,0.911285349117427,
+		0.911285349117427,0.911285349117427,0.911285349117428,0.911285349117427,
+		0.911285349117428,0.911285349117428,0.911285349117427,0.911285349117427,
+		0.911285349117427,1,0.911285349117427,0.911285349117427,0.911285349117428,
+		0.911285349117428,0.911285349117427,0.911285349117428,0.911285349117427,
+		0.911285349117427,0.911285349117427,0.911285349117427,1,0.911285349117427,
+		0.911285349117428,0.911285349117428,0.911285349117427,0.911285349117428,
+		0.911285349117427,0.911285349117427,0.911285349117427,0.911285349117427,
+		0.911285349117427,1),.Dim = c(10L,10L))
+	p<-ncol(Sigma_u)
+	Sigma_c<-Sigma_u*1e-4
+	mu_c<-mu_u<-rep(0,p)
+	if(badlvg){
+		mu_c<-c(-4.22854266846095,11.5844644101451,1.95365021288789,1.47532732971518,
+			-0.956168758449073,-1.27946737454395,-1.60902211569976,-1.06377272455885,
+			-2.79897785779247,-3.08120273187174)
+	}
+	labels<-rep(1,n)
+	labels[1:(n*varepsilon)]<-0
+	Data<-matrix(NA,n,p)
+	Data[labels==1,]<-MASS::mvrnorm(sum(labels),mu_u,Sigma_u)
+	Data[labels==0,]<-MASS::mvrnorm(sum(!labels),mu_c,Sigma_c)
+	list(Data=Data,labels=labels,Sigma_u=Sigma_u)
 }

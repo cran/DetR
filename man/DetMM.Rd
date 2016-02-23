@@ -86,7 +86,9 @@ y0<-rnorm(n)
 out1<-DetMM(x0,y0,h=h)
 }
 \author{
- Vakili Kaveh with C code from M. Maechler (Qn) and R code from function lmrob in package robustbase.
+ Vakili Kaveh using translation of the C code from pcaPP (by Peter Filzmoser, Heinrich Fritz, Klaudius Kalcher, see citation("pcaPP")) for 
+ the Qn and scaleTau2 (Original by Kjell Konis with substantial modifications by Martin Maechler)  from robustbase
+ (see citation("scaleTau2")). This function calls lmrob in package robustbase.
 }
 \keyword{multivariate}
 \keyword{robust}

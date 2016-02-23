@@ -22,12 +22,14 @@ Index:
 DetR-package           Robust and Deterministic Algothms for Linear 
                         Regression
 DetLTS                  DetLTS algorithm (deterministic counterpart of FastLTS).
+OGKCStep               Tests of OGK+Csteps.
 DetMM                  DetMM algorithm (deterministic counterpart of FastMM).
-test_function		unit tests.
+test_function		unit test functions.
 }
 }
 \author{
-Kaveh Vakili [aut, cre],
+Kaveh Vakili [aut, cre], using translation and modifications of codes
+ from other packages (see Desrciption and the individual fuctions' helpfiles)
 
 Maintainer: Kaveh Vakili <vakili.kaveh.email@gmail.com>
 }
