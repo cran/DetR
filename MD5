@@ -1,4 +1,4 @@
-a2b77444792de3f28fb3c6387f52235c *DESCRIPTION
+6fa27e95a3e1bb23f1b5636c46c65f9f *DESCRIPTION
 0e284f4e6ed8855420f579b2e8174fa4 *NAMESPACE
 4321b815c5d7a4d8ea4bed97d38bb304 *R/DetLTS.R
 e3881912bfcb43b310427fd60b17f99c *R/DetMCDLTS.R
@@ -22,4 +22,5 @@ d6ad3d1c3cf3fe2dbd3f3d6b96358e5d *src/DetR_3.cpp
 bf60c47a14d4aecfcd2bf2702637c3d6 *src/Makevars
 a68f199e32889b4dfd181da114dc6adc *src/Makevars.win
 5f7b7405833dee2494d7f26dcfa2e981 *src/ext_cstep.cpp
-f88bdf9ceefcb5c4e01c7fab9e12e703 *src/unimcd.cpp
+58d2320b0c3bdb8004173c3db9b75233 *src/init.c
+600bcddcd4b5d2dc521081c325e40a9c *src/unimcd.cpp

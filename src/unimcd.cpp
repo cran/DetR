@@ -45,16 +45,18 @@ extern "C"{
 	}
 }
 /*
+Sys.getenv("R_INCLUDE_DIR")	#/usr/share/R/include
+Sys.getenv("R_LIBS_SITE")	#/usr/local/lib/R/site-library
 ###
 q("no")
 ###
-cd /home/kaveh/Desktop/work/mia/detlts/deltsR
+cd /home/kaveh/Desktop/work/mia/detlts/detltsR
 g++ -I/usr/share/R/include -I/home/kaveh/Desktop/work/p1/geqw4/vi3/out/sp/ccode/eigen -fpic -O3 -c -DEIGEN_NO_DEBUG unimcd.cpp -o unimcd.o
-g++ -shared -o unimcd.so unimcd.o -L/usr/local/lib/R/site -Wl,-rpath,/usr/local/lib/R/site -L/usr/lib64/R/lib -lR
+g++ -shared -o unimcd.so unimcd.o -L/usr/local/lib/R/site -Wl,-rpath,/usr/local/lib/R/site -lR
 ###
 R
 library(robustbase)
-setwd("/home/kaveh/Desktop/work/mia/detlts/deltsR/")
+setwd("/home/kaveh/Desktop/work/mia/detlts/detltsR/")
 source("UNIMCD.R")
 dyn.load("unimcd.so");
 
